@@ -9,9 +9,9 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-#Objective
+#1.Objective
 Compare ropls, metabom8 and RGCCA produced scores and loadings for a PLS analysis. Use the full Cambridge set to make the comparison (ignore the imbalance in control and covid subject numbers). 
-#load data
+#2.Load Data Cambridge LIPO
 ```{r}
 library(fusion)
 library(dplyr)
@@ -57,16 +57,16 @@ SampleIDs<-as.data.frame(t(t(df3$sampleID)))
 SampleIDs %>% rename("sampleID"="V1") 
 ```
 
-#metabom8
+#3.OPLSDA metabom8
 plsda is used to fit standard PLS models for classification while splsda performs sparse PLS that embeds feature selection and regularization for the same purpose.
 ```{r cars}
 #pls <- function(X, Y, center = TRUE, scale = 'UV', cv=list(method='k-fold_stratified', k=7, split=2/3), maxPCo = 5, plotting = TRUE)
-Metabom8pls<-metabom8::opls(df3[1:112], df3$covid_status, center=TRUE, scale='UV', cv=list(method='MC', k=200, split=2/3), maxPCo=5, plotting=TRUE)
+Metabom8pls<-metabom8::opls(df4[1:112], df4$covid_status, center=TRUE, scale='UV', cv=list(method='MC', k=200, split=2/3), maxPCo=5, plotting=TRUE)
 Metabom8scores<-as.data.frame(Metabom8pls@t_pred)
 Metabom8loadings<-as.data.frame(t(Metabom8pls@p_pred))
 
 ```
-#RGCCA
+#4.PLS RGCCA
 
 If tau is 1 with method set to rgcca, PLS mode A (which favours the summary of each block, aka the outer components). If tau is set to 0 with method rgcca, PLS mode B (which favours the inner model, aka takes into account the relations between the blocks). For RGCCA, to extract the loadings, a plot must be made and the loadings extracted from that. The values of "a" in the model output are the block weight vectors for block j. 
 ```{r}
@@ -137,7 +137,7 @@ RGCCAloadings<-as.data.frame(modCV[["a"]][["Lipop"]])#gives information for vari
 # RGCCAloadings<-modCV[["a"]][["Lipop"]]#gives information for variable selection
 ```
 
-#ropls
+#5.OPLSDA ropls
 ## Including Plots
 scoreMN Numerical matrix of x scores (T; dimensions: nrow(x) x predI) X = TP' + E; Y = TC' + F
 
@@ -145,13 +145,15 @@ loadingMN Numerical matrix of x loadings (P; dimensions: ncol(x) x predI) X = TP
 
 ```{r pressure, echo=FALSE}
 
-roplsresult<-ropls::opls(df3[,1:112], df3$covid_status, predI = 1, orthoI = NA, algoC='nipals', crossvalI = 7)
+roplsresult<-ropls::opls(df3[,1:112], df3$covid_status, predI = NA, orthoI = 0, algoC='nipals', crossvalI = 7)
 #roplsres<-ropls::opls(df3[,1:112], df3$covid_status)
 roplsscores<-as.data.frame(roplsresult@scoreMN)
 roplsloadings<-as.data.frame(roplsresult@loadingMN)
+
+
 ```
 
-#loadings comparison
+#6.Predictive loadings comparison
 ```{r}
 PLSload<- as.data.frame((cbind(LipoproteinNames, roplsloadings$p1, Metabom8loadings$V1, RGCCAloadings$V1))) %>%
   rename("ropls" ="roplsloadings$p1","metabom8" ="Metabom8loadings$V1", "rgcca"="RGCCAloadings$V1")
@@ -184,7 +186,7 @@ cor.test(PLSload$metabom8, PLSload$rgcca, method="pearson")
 
 
 ```
-#scores comparison
+#7.Predictive scores comparison
 ```{r}
 PLSscore<- as.data.frame((cbind(SampleIDs, roplsscores$p1, Metabom8scores$V1, RGCCAscores$comp1))) %>%
   rename("ropls" ="roplsscores$p1","metabom8" ="Metabom8scores$V1", "rgcca"="RGCCAscores$comp1")
@@ -219,7 +221,12 @@ cor.test(PLSscore$metabom8, PLSscore$rgcca, method="pearson")
 
 
 ```
-#ropls correlation
+
+#8.ropls correlation
+
+The ropls package won't perform an OPLS(DA) on teh large cambridge dataset. Below is a comparison of the predictive scores and loadings using a smaller, evenly grouped dataset (same number of covid/controls and equal gender rep in each group). 
+
+The predictive scores and loadings are highly correlated and so the use of the PLSDA on the large cambridge data set for predicitve scores and loadings (calculated above in section 5. and compared in sections 6. and 7. ) is justifiable. 
 ```{r}
 
 set.seed(1)
@@ -290,4 +297,301 @@ V=list(UV=UnivariateSignificant$Lipoprotein, PLSDA=PLSDAsig$Lipoprotein, OPLSDA=
 ggVennDiagram(V, color = "black", lwd = 0.8, lty = 1) + 
   scale_fill_gradient(low = "#F4FAFE", high = "#4981BF")
 ```
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+#9. Orthoginal
+Only metabom8 and ropls calculated and compared, RGCCA does not provide OPLS/orthoginal values.
+```{r}
+#metabom8
+Metabom8pls<-metabom8::opls(df5[1:112], df5$covid_status, center=TRUE, scale='UV', cv=list(method='MC', k=200, split=2/3), maxPCo=5, plotting=TRUE)
+Metabom8Orthscores<-as.data.frame(Metabom8pls@t_orth)
+Metabom8Orthloadings<-as.data.frame(t(Metabom8pls@p_orth))
+
+#ropls
+roplsOPLSDA<-ropls::opls(df5[,1:112], df5$covid_status, predI = 1, orthoI = NA, algoC='nipals', crossvalI = 7)#typeC is OPLS-DA
+roplsOPLSDAOrthscores<-as.data.frame(roplsOPLSDA@orthoScoreMN)
+roplsOPLSDAOrthloadings<-as.data.frame(roplsOPLSDA@orthoLoadingMN)
+
+#comparative plots
+##Scores
+ORTHscore<- as.data.frame((cbind(df5$sampleID, roplsOPLSDAOrthscores$o1, Metabom8Orthscores$V1))) %>%
+  rename(,"ropls" ="V2","metabom8" ="V3", )
+ORTHscore$ropls<-as.numeric(ORTHscore$ropls) 
+ORTHscore$metabom8<-as.numeric(ORTHscore$metabom8) 
+
+library(reshape2)
+df <- melt(ORTHscore ,  id.vars = 'V1', variable.name = 'Method')
+
+### plot on same grid, each series colored differently -- 
+### good if the series have same scale
+ggplot(df, aes(V1,value)) + 
+  geom_point(aes(colour = Method)) +
+  #geom_line() +
+  #theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  theme(axis.text.x = element_blank())+
+  labs(x="SampleID", y="Scores")
+
+
+###plots for correlation 
+ggplot(data=ORTHscore, aes(ropls, metabom8)) + geom_point()+stat_summary(fun.data=mean_cl_normal) + 
+  geom_smooth(method='lm', formula= y~x)+ theme_minimal()+ggtitle("Orthogonal Scores")
+cor.test(ORTHscore$ropls, ORTHscore$metabom8, method="pearson")
+
+
+##Loadings
+ORTHloading<- as.data.frame((cbind(LipoproteinNames, roplsOPLSDAloadings$p1, Metabom8Orthloadings$V1))) %>%
+  rename("ropls" ="roplsOPLSDAloadings$p1","metabom8" ="Metabom8Orthloadings$V1", )
+ 
+
+library(reshape2)
+df <- melt(ORTHloading ,  id.vars = 'V1', variable.name = 'Method')
+
+### plot on same grid, each series colored differently -- 
+### good if the series have same scale
+ggplot(df, aes(V1,value)) + 
+  geom_point(aes(colour = Method)) +
+  #geom_line() +
+  #theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  theme(axis.text.x = element_blank())+
+  labs(x="SampleID", y="Scores")
+
+
+###plots for correlation 
+ggplot(data=ORTHloading, aes(ropls, metabom8)) + geom_point()+stat_summary(fun.data=mean_cl_normal) + 
+  geom_smooth(method='lm', formula= y~x)+ theme_minimal()+ggtitle("Orthogonal Loadings")
+cor.test(ORTHloading$ropls, ORTHloading$metabom8, method="pearson")
+```
+
+#Load Data Biogune Amino Acids
+```{r}
+ann<-local(get(load("~/OneDrive - Murdoch University/datasets/covid19/bioGune/dataElements/covid19_bioGune_PLA_ANN.daE")))
+aaMeta1<-ann@obsDescr[[1]]
+
+aa<-local(get(load(file.path("~/OneDrive - Murdoch University/datasets/covid19/bioGune/dataElements/covid19_bioGune_PLA_AA.daE"))))
+aaData<-data.frame(apply(aa@.Data,2,as.numeric)) #Amino Acids
+aaMeta2<-aa@obsDescr[[1]] #metadata from covid19_mauritius_PLA_LIPO.daE file
+
+# match Amino Acids and both Annotations
+aaMeta1<-aaMeta1[which(aaMeta1$sampleID %in% aaMeta2$sampleID),]
+aaData<-aaData[which(aaMeta2$sampleID %in% aaMeta1$sampleID),]
+aaMeta2<-aaMeta2[which(aaMeta2$sampleID %in% aaMeta1$sampleID),]
+
+aaMetaF<-merge(aaMeta1,
+                  aaMeta2,
+                  by.x ="sampleID",by.y = "sampleID")
+rm(aaMeta1, aaMeta2, aa, ann)
+aaData<-aaData[,-grep("13C|AccQTag",colnames(aaData))]
+aaData<-aaData[,-which(colnames(aaData) %in% c("beta.aminoisobutyric.acid","beta.alanine","gamma.aminobutyric.acid","Cystine", "Sarcosine"))]
+
+#remove X3-methylhistidine (too many NAs)
+idx<-which(is.na(aaData),arr.ind = TRUE) #see entries with NA
+col_idx<-as.numeric(unique(idx[,2])) #identify the coloumn numbers
+aaData<- aaData[,-2]#remove the column
+
+aaData$aa_na_count <- apply(aaData, 1, function(x) sum(is.na(x))) #make column of how many NAs exist in each row
+
+BIOaa<-cbind(aaData, aaMetaF)
+rm(aaData, aaMetaF)
+
+idx<-which(BIOaa$aa_na_count>0)
+BIOaa<-BIOaa[-idx,]
+
+which(is.na(BIOaa$sex))
+unique(BIOaa$sex)
+
+unique(BIOaa$group)
+BIOaa$covid_status<-ifelse(BIOaa$group =="COVID-pos","covid", ifelse(BIOaa$group=="preCOVID","control", "control"))
+
+table(BIOaa$sex, BIOaa$covid_status)
+
+#smaller dataset
+set.seed(1)
+
+malecovid<-BIOaa %>%
+  filter(covid_status=="covid" ,sex=="male")
+femalecovid<-BIOaa %>%
+  filter(covid_status=="covid" ,sex=="female")
+controls<-BIOaa %>%
+  filter(covid_status=="control")
+
+x<-femalecovid[sample(nrow(femalecovid), 60), ]
+y<-malecovid[sample(nrow(malecovid), 60), ]
+
+BIOaa_small<-rbind(controls, x, y)
+
+
+rm(x, y, controls, femalecovid, malecovid)
+
+```
+#OPLS Metabom8
+```{r}
+Metabom8pls<-metabom8::opls(BIOaa[1:23], BIOaa$covid_status, center=TRUE, scale='UV', cv=list(method='MC', k=200, split=2/3), maxPCo=0, plotting=TRUE)
+Metabom8scores<-as.data.frame(Metabom8pls@t_pred)
+Metabom8loadings<-as.data.frame(t(Metabom8pls@p_pred))
+```
+
+#OPLS ropls
+
+```{r}
+
+roplsresult<-ropls::opls(BIOaa[,1:23], BIOaa$covid_status, predI = 1, orthoI = NA, algoC='nipals', crossvalI = 7)
+#roplsres<-ropls::opls(df3[,1:112], df3$covid_status)
+roplsscores<-as.data.frame(roplsresult@scoreMN)
+roplsloadings<-as.data.frame(roplsresult@loadingMN)
+```
+
+#loadings comparison
+```{r}
+AminoAcids<-as.data.frame(colnames(BIOaa_small))
+
+PLSload<- as.data.frame((cbind(AminoAcids[1:23,], roplsloadings$p1, Metabom8loadings$V1))) %>%
+  rename("AminoAcids"="V1","ropls" ="V3","metabom8" ="V2")
+PLSload$metabom8<-as.numeric(PLSload$metabom8)
+PLSload$ropls<-as.numeric(PLSload$ropls)
+library(reshape2)
+df <- melt(PLSload ,  id.vars = 'AminoAcids', variable.name = 'Method')
+
+# plot on same grid, each series colored differently -- 
+# good if the series have same scale
+ggplot(df, aes(AminoAcids,value)) + 
+  geom_point(aes(colour = Method)) +
+  geom_line() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(x="AminoAcids", y="Loadings")
+
+ 
+#plots for correlation 
+ggplot(data=PLSload, aes(ropls, metabom8)) + geom_point()+ stat_summary(fun.data=mean_cl_normal) + geom_smooth(method='lm', formula= y~x) + theme_minimal() + ggtitle("Loadings")
+  cor.test(PLSload$metabom8, PLSload$ropls, method="pearson")
+
+```
+
+#Scores comparison
+```{r}
+SampleID<-as.data.frame(BIOaa$sampleID)
+PLSscore<- as.data.frame((cbind(SampleID, roplsscores$p1, Metabom8scores$V1))) %>%
+  rename("SampleID"="BIOaa$sampleID","ropls" ="roplsscores$p1","metabom8" ="Metabom8scores$V1")
+ 
+
+library(reshape2)
+df <- melt(PLSscore ,  id.vars = 'SampleID', variable.name = 'Method')
+
+# plot on same grid, each series colored differently -- 
+# good if the series have same scale
+ggplot(df, aes(SampleID,value)) + 
+  geom_point(aes(colour = Method)) +
+  #geom_line() +
+  #theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  theme(axis.text.x = element_blank())+
+  labs(x="SampleID", y="Scores")
+
+
+#plots for correlation 
+ggplot(data=PLSscore, aes(ropls, metabom8)) + geom_point()+stat_summary(fun.data=mean_cl_normal) + 
+  geom_smooth(method='lm', formula= y~x)+ theme_minimal()+ggtitle("Scores")
+cor.test(PLSscore$ropls, PLSscore$metabom8, method="pearson")
+```
+#PLS RGCCA
+
+If tau is 1 with method set to rgcca, PLS mode A (which favours the summary of each block, aka the outer components). If tau is set to 0 with method rgcca, PLS mode B (which favours the inner model, aka takes into account the relations between the blocks). For RGCCA, to extract the loadings, a plot must be made and the loadings extracted from that. The values of "a" in the model output are the block weight vectors for block j. 
+```{r}
+library(RGCCA)
+#covert gender and covid_status to numeric then as factors
+
+BIOaaRGCCA<-BIOaa
+BIOaaRGCCA$sex<-as.factor((BIOaaRGCCA$sex))
+BIOaaRGCCA$covid_status<-as.factor((BIOaaRGCCA$covid_status))
+
+BIOaaRGCCA$sex<-as.factor(ifelse(BIOaaRGCCA$sex=="M",1,0))
+BIOaaRGCCA$covid_status<-as.factor(ifelse(BIOaaRGCCA$covid_status=="covid",1,0))
+
+AminoAcids = BIOaaRGCCA[,1:23] 
+metadata= BIOaaRGCCA[,c("covid_status")]
+
+#set up use for package
+blocks <- list(AminoAcids=AminoAcids,
+               metadata=metadata)
+
+construction<- matrix(c(0,1,
+                        1,0), 2,2)
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(caret)
+
+#rgcca model
+modCV<- rgcca(blocks = blocks,
+               method= "rgcca",
+               connection = construction,
+               tau = rep(1, length(blocks)), # has to be one for sgcca, 0 for rgcca (PLS mode B) 1 for rgcca (PLS mode A)
+               sparsity = c(1, 1),
+               response = length(blocks),
+               ncomp = rep(1, length(blocks)),
+               scheme = "centroid", # factorial and centroid allows for negative correlation
+               verbose = TRUE)
+
+RGCCAscores<-as.data.frame(modCV[["Y"]][["AminoAcids"]])
+RGCCAloadings<-as.data.frame(modCV[["a"]][["AminoAcids"]])#gives information for variable selection
+```
+
+#PLS ropls
+
+```{r}
+roplsresult<-ropls::opls(BIOaa[,1:23], BIOaa$covid_status, predI = NA, orthoI = 0, algoC='nipals', crossvalI = 7)
+#roplsres<-ropls::opls(df3[,1:112], df3$covid_status)
+roplsscores<-as.data.frame(roplsresult@scoreMN)
+roplsloadings<-as.data.frame(roplsresult@loadingMN)
+```
+
+#loadings comparison
+```{r}
+AminoAcids<-as.data.frame(colnames(BIOaa_small))
+
+PLSload<- as.data.frame((cbind(AminoAcids[1:23,], roplsloadings$p1, RGCCAloadings$V1))) %>%
+  rename("AminoAcids"="V1","ropls" ="V3","rgcca" ="V2")
+PLSload$rgcca<-as.numeric(PLSload$rgcca)
+PLSload$ropls<-as.numeric(PLSload$ropls)
+library(reshape2)
+df <- melt(PLSload ,  id.vars = 'AminoAcids', variable.name = 'Method')
+
+# plot on same grid, each series colored differently -- 
+# good if the series have same scale
+ggplot(df, aes(AminoAcids,value)) + 
+  geom_point(aes(colour = Method)) +
+  geom_line() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(x="AminoAcids", y="Loadings")
+
+ 
+#plots for correlation 
+ggplot(data=PLSload, aes(ropls, rgcca)) + geom_point()+ stat_summary(fun.data=mean_cl_normal) + geom_smooth(method='lm', formula= y~x) + theme_minimal() + ggtitle("Loadings")
+  cor.test(PLSload$metabom8, PLSload$ropls, method="pearson")
+
+```
+
+#Scores comparison
+```{r}
+SampleID<-as.data.frame(BIOaa$sampleID)
+PLSscore<- as.data.frame((cbind(SampleID, roplsscores$p1, RGCCAscores$comp1))) %>%
+  rename("SampleID"="BIOaa$sampleID","ropls" ="roplsscores$p1","rgcca" ="RGCCAscores$comp1")
+ 
+
+library(reshape2)
+df <- melt(PLSscore ,  id.vars = 'SampleID', variable.name = 'Method')
+
+# plot on same grid, each series colored differently -- 
+# good if the series have same scale
+ggplot(df, aes(SampleID,value)) + 
+  geom_point(aes(colour = Method)) +
+  #geom_line() +
+  #theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  theme(axis.text.x = element_blank())+
+  labs(x="SampleID", y="Scores")
+
+
+#plots for correlation 
+ggplot(data=PLSscore, aes(ropls, rgcca)) + geom_point()+stat_summary(fun.data=mean_cl_normal) + 
+  geom_smooth(method='lm', formula= y~x)+ theme_minimal()+ggtitle("Scores")
+cor.test(PLSscore$ropls, PLSscore$rgcca, method="pearson")
+```
