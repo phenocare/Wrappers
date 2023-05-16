@@ -1,0 +1,1139 @@
+---
+title: "Build wrappers"
+author: "Lucy Grigoroff"
+date: "2023-04-17"
+output: html_document
+---
+
+```{r}
+library(pkgbuild)
+pkgbuild::check_build_tools(debug = TRUE)
+library(devtools)
+
+install.packages("roxygen2")
+install.packages("usethis")
+install.packages("curl")
+install.packages("httr")
+install.packages("jsonlite")
+install.packages("attempt")
+install.packages("purrr")
+devtools::install_github("r-lib/desc")
+```
+#Load data Biogune SpcGlyc
+```{r}
+ann<-local(get(load("~/OneDrive - Murdoch University/datasets/covid19/bioGune/dataElements/covid19_bioGune_PLA_ANN.daE")))
+aaMeta1<-ann@obsDescr[[1]]
+
+aa<-local(get(load(file.path("~/OneDrive - Murdoch University/datasets/covid19/bioGune/dataElements/covid19_bioGune_PLA_SPC.daE"))))
+aaData<-data.frame(apply(aa@.Data,2,as.numeric)) #lipoproteins
+aaMeta2<-aa@obsDescr[[1]] #metadata from covid19_mauritius_PLA_LIPO.daE file
+
+# match Amino Acids and both Annotations
+aaMeta1<-aaMeta1[which(aaMeta1$sampleID %in% aaMeta2$sampleID),]
+aaData<-aaData[which(aaMeta2$sampleID %in% aaMeta1$sampleID),]
+aaMeta2<-aaMeta2[which(aaMeta2$sampleID %in% aaMeta1$sampleID),]
+
+aaMetaF<-merge(aaMeta1,
+                  aaMeta2,
+                  by.x ="sampleID",by.y = "sampleID")
+rm(aaMeta1, aaMeta2, aa, ann)
+
+BIOspcglyc<-cbind(aaData, aaMetaF)
+rm(aaData, aaMetaF)
+
+which(BIOspcglyc[, 1:8]=="Inf")
+which(is.na(BIOspcglyc[, 1:8]))
+which(is.na(BIOspcglyc$age))
+unique(BIOspcglyc$sex)
+
+unique(BIOspcglyc$group)
+BIOspcglyc$covid_status<-ifelse(BIOspcglyc$group =="COVID-pos","covid", ifelse(BIOspcglyc$group=="preCOVID","control", "control"))
+```
+## Wrappers
+
+Packages ropls, metabom8 and RGCCA require wrappers. Not sure if RGCCA is fully possible since it undergoes a lot of changes. I have a somewhat current updated version off githu that allows SGCCA method. The CRAN version did not allow this. Unsure if the wrappers will be for the particular desired functions. For example, to perform on OPLSDA or make a plotscore as separate wrappers, or do the wrappers encompass an entire package such as ropls? 
+
+If the former, then do you wish to specify which of the packages you want to use? Do you select one and just go with that? 
+
+If it's for the latter, it would seem you'd just convert the input and output to be labelled the same for all? Eg predictive scores aren't called t_pred (metabom8) or ScoreMN (ropls), just Predictive_scores. 
+
+
+# Screeplot, cumulatice cariance and threshold
+PCA plots-prcomp, since it uses svd which is preferred to the eigen based method
+ploscores-ropls
+plotloadings-ropls
+PickVariables-?
+```{r}
+#Calculation 
+results<-prcomp(BIOspcglyc[,1:8], center = TRUE, scale. = TRUE)
+#set up data frame
+summary(results)->for.scree
+for.scree<-rownames_to_column(as.data.frame(t(for.scree$importance)))%>% mutate(across(where(is.double), ~.x*100))
+
+#screeplot
+Screeplot<-ggplot(data=for.scree, aes(x=`rowname`, y=(`Proportion of Variance`))) +
+ geom_point(colour="red") + 
+  geom_line(group=1, colour="red")+
+    ggtitle("Scree Plot") +
+      xlab("PC") + 
+       ylab("Proportion of Variance (%)")
+#cumulative variance plot
+CumulativeVariance<-ggplot(data=for.scree, aes(x=`rowname`, y=`Cumulative Proportion`))+geom_point(colour="blue")+ geom_line(group=1, colour="blue")+ggtitle("Cumulative Variance") + xlab("PC")+ylab("Cumulative Variance Explained(%)")
+
+#threshold for number of PCs
+threshold<-for.scree%>%
+  filter(`Cumulative Proportion`<99)%>%
+  tail(,n=1)
+
+library(ggpubr)
+threshold.p <- ggtexttable(threshold, rows = NULL, 
+                        theme = ttheme("mOrange"))
+
+#all information in one figure
+library("cowplot")
+ggdraw() +
+  draw_plot(Screeplot, x = 0, y = .5, width = .5, height = .5) +
+  draw_plot(CumulativeVariance, x = .5, y = .5, width = .5, height = .5) +
+  draw_plot(threshold.p, x = 0, y = 0, width = 1, height = 0.5) +
+  draw_plot_label(label = c("A", "B", "C"), size = 15,
+                  x = c(0, 0.5, 0), y = c(1, 1, 0.5))
+```
+#plotscores
+```{r}
+
+ANNO<-BIOspcglyc[,-1:-8]
+scores<-(as.data.frame(results[["x"]]))
+df<-cbind(scores, ANNO)
+
+e <- car::dataEllipse(scores$PC1, scores$PC2, as.factor(ANNO$covid_status))
+#coordinates
+e$control$`0.95`
+e$covid$`0.95`
+```
+
+#plot_ly (works but not ellipses)
+need to add ellipses?
+maybe alter colour scheme
+
+```{r}
+library(plotly)
+df<-cbind(as.data.frame(results[["x"]]), BIOspcglyc[,-1:-8])
+
+PCAgrid<-function(Xnum,Ymeta,threshold, Label2=NULL, Label3=NULL, Label4=NULL, Title=NULL){
+#compute PC's
+results<-prcomp(Xnum, scale=TRUE, center=TRUE)
+
+#store the variance information 
+explained_variance_ratio <- summary(results)[["importance"]]['Proportion of Variance',]
+explained_variance_ratio <- 100 * explained_variance_ratio
+
+#create df for plot_ly use
+df<-cbind(as.data.frame(results[["x"]]), Ymeta)
+
+#Function to only plot the desired number of PCAs (set by setting the threshold)
+Dimensions<-function(threshold){
+  if(threshold==2){Dimensions=list(
+      list(label=paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), values=df$PC1),
+      list(label=paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = ''), values=df$PC2)
+      )
+        }else if (threshold==3) {Dimensions=list(
+            list(label=paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), values=df$PC1),
+            list(label=paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = ''), values=df$PC2),
+            list(label=paste('PC 3 (',toString(round(explained_variance_ratio[3],1)),'%)',sep = ''), values=df$PC3)
+          )
+            } else if (threshold==4) {Dimensions=list(
+              list(label=paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), values=df$PC1),
+              list(label=paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = ''), values=df$PC2),
+              list(label=paste('PC 3 (',toString(round(explained_variance_ratio[3],1)),'%)',sep = ''), values=df$PC3),
+              list(label=paste('PC 4 (',toString(round(explained_variance_ratio[4],1)),'%)',sep = ''), values=df$PC4)
+            )
+            }else if (threshold==5) {Dimensions=list(
+              list(label=paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), values=df$PC1),
+              list(label=paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = ''), values=df$PC2),
+              list(label=paste('PC 3 (',toString(round(explained_variance_ratio[3],1)),'%)',sep = ''), values=df$PC3),
+              list(label=paste('PC 4 (',toString(round(explained_variance_ratio[4],1)),'%)',sep = ''), values=df$PC4),
+              list(label=paste('PC 5 (',toString(round(explained_variance_ratio[5],1)),'%)',sep = ''), values=df$PC5)
+            )
+            }else if (threshold==6) {Dimensions=list(
+              list(label=paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), values=df$PC1),
+              list(label=paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = ''), values=df$PC2),
+              list(label=paste('PC 3 (',toString(round(explained_variance_ratio[3],1)),'%)',sep = ''), values=df$PC3),
+              list(label=paste('PC 4 (',toString(round(explained_variance_ratio[4],1)),'%)',sep = ''), values=df$PC4),
+              list(label=paste('PC 5 (',toString(round(explained_variance_ratio[5],1)),'%)',sep = ''), values=df$PC5),
+              list(label=paste('PC 6 (',toString(round(explained_variance_ratio[6],1)),'%)',sep = ''), values=df$PC6)
+            )
+            }else if (threshold==7) {Dimensions=list(
+              list(label=paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), values=df$PC1),
+              list(label=paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = ''), values=df$PC2),
+              list(label=paste('PC 3 (',toString(round(explained_variance_ratio[3],1)),'%)',sep = ''), values=df$PC3),
+              list(label=paste('PC 4 (',toString(round(explained_variance_ratio[4],1)),'%)',sep = ''), values=df$PC4),
+              list(label=paste('PC 5 (',toString(round(explained_variance_ratio[5],1)),'%)',sep = ''), values=df$PC5),
+              list(label=paste('PC 6 (',toString(round(explained_variance_ratio[6],1)),'%)',sep = ''), values=df$PC6),
+              list(label=paste('PC 7 (',toString(round(explained_variance_ratio[7],1)),'%)',sep = ''), values=df$PC7)
+            )}else if (threshold==8) {Dimensions=list(
+              list(label=paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), values=df$PC1),
+              list(label=paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = ''), values=df$PC2),
+              list(label=paste('PC 3 (',toString(round(explained_variance_ratio[3],1)),'%)',sep = ''), values=df$PC3),
+              list(label=paste('PC 4 (',toString(round(explained_variance_ratio[4],1)),'%)',sep = ''), values=df$PC4),
+              list(label=paste('PC 5 (',toString(round(explained_variance_ratio[5],1)),'%)',sep = ''), values=df$PC5),
+              list(label=paste('PC 6 (',toString(round(explained_variance_ratio[6],1)),'%)',sep = ''), values=df$PC6),
+              list(label=paste('PC 7 (',toString(round(explained_variance_ratio[7],1)),'%)',sep = ''), values=df$PC7),
+              list(label=paste('PC 8 (',toString(round(explained_variance_ratio[8],1)),'%)',sep = ''), values=df$PC8)
+            )}
+  return(Dimensions)}
+#function to colour code according to the desired metadata
+Color<-function(Ymeta)
+  {
+if (class(Ymeta)=='factor'){
+  X=as.numeric(Ymeta)
+}else if (class(Ymeta)=='logical'){
+  X=as.numeric(Ymeta)
+}else if(class(Ymeta)=='character'){
+  X=as.numeric(as.factor(Ymeta))
+}else if(class(Ymeta)=='numeric'){
+  X=Ymeta
+}else{
+  X=Ymeta
+}
+  return(X)
+}
+#plot_ly splom figure
+axis = list(showline=FALSE,
+            zeroline=FALSE,
+            gridcolor='#ffff',
+            ticklen=4,
+            titlefont=list(size=13))
+
+fig <- df %>%
+  plot_ly() 
+fig <- fig %>%
+  add_trace(
+    type = 'splom',
+    dimensions = Dimensions(threshold),
+    text = paste(Ymeta, Label2, Label3, Label4),
+    #text=(Ymeta),
+    #text=factor(Ymeta),
+    diagonal=list(visible=F),
+    color = Ymeta, colors = c('#636EFA','#EF553B','#00CC96'),
+    marker = list(
+      #color = Color(Ymeta),
+      #colorscale = pl_colorscale,
+      size = 5,
+      line = list(
+        width = 1,
+        color = 'rgb(230,230,230)'
+      )
+    )
+  ) 
+fig <- fig %>%
+  layout(
+    title = Title,
+    legend=list(title=list(text='color')),
+    #legend=Ymeta,
+    hovermode='closest',
+    dragmode = 'select',
+    plot_bgcolor='rgba(240,240,240, 0.95)',
+    xaxis=list(domain=NULL, showline=F, zeroline=F, gridcolor='#ffff', ticklen=4, titlefont=list(size=13)),
+    yaxis=list(domain=NULL, showline=F, zeroline=F, gridcolor='#ffff', ticklen=4, titlefont=list(size=13)),
+    xaxis2=axis,
+    xaxis3=axis,
+    xaxis4=axis,
+    xaxis5=axis,
+    xaxis6=axis,
+    xaxis7=axis,
+    xaxis8=axis,
+    yaxis2=axis,
+    yaxis3=axis,
+    yaxis4=axis,
+    yaxis5=axis,
+    yaxis6=axis,
+    yaxis7=axis,
+    yaxis8=axis
+  )
+
+fig
+#remove top half
+fig2 <-  fig %>% style(showupperhalf = F)
+fig2
+}
+
+#test
+PCAgrid(Xnum=BIOspcglyc[,1:8],Ymeta=BIOspcglyc$age,Label2=BIOspcglyc$sex, Label3=BIOspcglyc$sampleID, Label4=BIOspcglyc$patientID, threshold=4, Title="BIOspcglyc by gender")
+PCAgrid(Xnum=BIOspcglyc[,1:8],Ymeta=BIOspcglyc$sex,Label2=df$age, Label3=NULL, Label4=NULL, threshold=4, Title="BIOspcglyc by gender")
+PCAgrid(Xnum=BIOspcglyc[,1:8],Ymeta=BIOspcglyc$covid_status,threshold=3)
+PCAgrid(Xnum=BIOspcglyc[,1:8],Ymeta=BIOspcglyc$age,threshold=3)
+```
+#####iris eg with plotly
+```{r}
+data(iris)
+X <- subset(iris, select = -c(Species))
+prin_comp <- prcomp(X)
+explained_variance_ratio <- summary(prin_comp)[["importance"]]['Proportion of Variance',]
+explained_variance_ratio <- 100 * explained_variance_ratio
+components <- prin_comp[["x"]]
+components <- data.frame(components)
+components <- cbind(components, iris$Species)
+#components$PC3 <- -components$PC3
+#components$PC2 <- -components$PC2
+
+axis = list(showline=FALSE,
+            zeroline=FALSE,
+            gridcolor='#ffff',
+            ticklen=4,
+            titlefont=list(size=13))
+
+fig <- components %>%
+  plot_ly()  %>%
+  add_trace(
+    type = 'splom',
+    dimensions = list(
+      list(label=paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), values=~PC1), 
+      list(label=paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = ''), values=~PC2),
+      list(label=paste('PC 3 (',toString(round(explained_variance_ratio[3],1)),'%)',sep = ''), values=~PC3),
+      list(label=paste('PC 4 (',toString(round(explained_variance_ratio[4],1)),'%)',sep = ''), values=~PC4)
+    ),
+    color = ~iris$Species, colors = c('#636EFA','#EF553B','#00CC96')
+  ) %>%
+  # add_trace(
+  #     type='polygon',
+  #     z=NULL,x = covidellipse$x, y=covidellipse$y, inherit = FALSE, showlegend = FALSE
+  #   )%>%
+  
+add_polygons(x = controlellipse$x, y=controlellipse$y, inherit = FALSE, showlegend = FALSE)%>%add_polygons(x = covidellipse$x, y=covidellipse$y, inherit = FALSE, showlegend = FALSE)%>%
+#add_polygons(z=NULL, x = covidellipse$x, y=covidellipse$y, inherit = FALSE, showlegend = FALSE)%>%
+  style(diagonal = list(visible = FALSE)) %>%
+  layout(
+    legend=list(title=list(text='color')),
+    hovermode='closest',
+    dragmode= 'select',
+    plot_bgcolor='rgba(240,240,240, 0.95)',
+    xaxis=list(domain=NULL, showline=F, zeroline=F, gridcolor='#ffff', ticklen=4),
+    yaxis=list(domain=NULL, showline=F, zeroline=F, gridcolor='#ffff', ticklen=4),
+    xaxis2=axis,
+    xaxis3=axis,
+    xaxis4=axis,
+    yaxis2=axis,
+    yaxis3=axis,
+    yaxis4=axis
+  )
+
+ fig
+
+##Using coordinates
+e <- car::dataEllipse(scores$PC1, scores$PC2, as.factor(ANNO$covid_status))
+#coordinates
+e$control$`0.95`
+e$covid$`0.95`
+
+```
+#####splot 
+```{r}
+library(plotly)
+install.packages(GGally)
+library(GGally)
+
+#perform PCA, fortify_pca passes the input to stats::prcomp, so acceptable
+library(opticskxi)
+test<-fortify_pca(BIOspcglyc[,1:8])
+opticskxi::ggpairs(test, columns=1:4)
+df_pca <- fortify_pca(BIOspcglyc[,1:8], sup_vars = ANNO)
+opticskxi::ggpairs(df_pca, group = 'covid_status', ellipses = TRUE, variables = TRUE)
+
+(GGally::ggpairs(df_pca, columns=1:4, ellipses = TRUE))
+
+ggplotly(p)
+ANNO<-BIOspcglyc[,-1:-8]
+scores<-(as.data.frame(results[["x"]]))
+df<-cbind(scores, ANNO)
+p <- GGally::ggpairs(df, columns = 1:4, ggplot2::aes(colour=covid_status))
+ggpairs(df_data = df, colors = , ellipses = TRUE)
+p <- ggpairs(df, columns = 1:4, ggplot2::aes(colour=covid_status))
+ggplotly(p)
+
+ggpairs(scores[,1:4])
+
+p <- GGally::ggpairs(BIOspcglyc[,1:8], title="correlogram with ggpairs()") 
+ ggplotly(p)
+ 
+ 
+ 
+ 
+## Plot Insertion Example
+custom_car <- GGally::ggpairs(mtcars[, c("mpg", "wt", "cyl")], upper = "blank", title = "Custom Example")
+# ggplot example taken from example(geom_text)
+  plot <- ggplot2::ggplot(mtcars, ggplot2::aes(x = wt, y = mpg, label = rownames(mtcars)))
+  plot <- plot +
+    ggplot2::geom_text(ggplot2::aes(colour = factor(cyl)), size = 3) +
+    ggplot2::scale_colour_discrete(l = 40)
+custom_car[1,2] <- plot
+personal_plot <- ggally_text(
+  "ggpairs allows you\nto put in your\nown plot.\nLike that one.\n <---"
+)
+custom_car[1, 3] <- personal_plot
+print(custom_car) 
+
+
+## Plot Insertion Example
+custom_car <- GGally::ggpairs(mtcars[, c("mpg", "wt", "cyl")], upper = "blank", title = "Custom Example")
+# ggplot example taken from example(geom_text)
+  plot <- ggplot2::ggplot(mtcars, ggplot2::aes(x = wt, y = mpg, label = rownames(mtcars)))
+  plot <- plot +
+    ggplot2::geom_text(ggplot2::aes(colour = factor(cyl)), size = 3) +
+    ggplot2::scale_colour_discrete(l = 40)
+custom_car[1,2] <- p1
+
+ggplotly(custom_car) 
+######
+p1 <- ggplotly(fviz_pca_ind(results, axes=c(1,2), label="none", habillage=df$covid_status,
+             addEllipses=TRUE, ellipse.level=0.95))
+
+PC1.2<-ggplotly(ggplot(scores, 
+       aes(x = PC1, 
+           y = PC2)) +
+  geom_point(aes(color = ANNO$covid_status, shape = ANNO$sex), size = 3) +
+  stat_ellipse(aes(group=interaction(ANNO$covid_status, color=ANNO$covid_status), color=ANNO$covid_status))+ guides(color = FALSE, shape = FALSE))
+#########
+custom_car <- GGally::ggpairs(df[, c("PC1", "PC2", "PC3")], ggplot2::aes(x=PC1, y=PC2, colour=df$covid_status), upper = "blank", title = "Custom Example")
+plot<-ggplot2::ggplot(df, ggplot2::aes(x=PC1, y=PC2, colour=covid_status))+geom_point()+stat_ellipse(aes(group=interaction(covid_status, color=covid_status), color=covid_status))
+custom_car[1,2] <- plot
+ggplotly(custom_car)
+
+
+custom_car <- GGally::ggpairs(df, columns = 1:4, upper = "blank", title = "Custom Example", ggplot2::aes(colour = covid_status))
+
+
+```
+```{r}
+
+library(plotly)
+library(ggfortify)
+library(cluster)
+
+p <- (autoplot(pam(iris[-5], 3), frame = TRUE, frame.type = 'norm'))
+iris
+ggplotly(p)
+
+test<-stat_ellipse(data=df, type = "t")
+
+df_pca <- fortify_pca(iris[-5])
+ggpairs(df_pca)
+df_pca <- fortify_pca(iris[-5], sup_vars = iris[5])
+ggplotly(ggpairs(df_pca, group = 'Species', ellipses = TRUE, variables = TRUE))
+df<-df%>%
+  group_by(covid_status)
+
+
+```
+####multiplot 
+```{r}
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+
+
+PC1.2<-ggplotly(ggplot(scores, 
+       aes(x = PC1, 
+           y = PC2)) +
+  geom_point(aes(color = ANNO$covid_status, shape = ANNO$sex), size = 3) +
+  stat_ellipse(aes(group=interaction(ANNO$covid_status, color=ANNO$covid_status), color=ANNO$covid_status))+ guides(color = FALSE, shape = FALSE))
+PC1.3<-ggplotly(ggplot(scores, 
+       aes(x = PC1, 
+           y = PC3)) +
+  geom_point(aes(color = ANNO$covid_status, shape = ANNO$sex), size = 3) +
+  stat_ellipse(aes(group=interaction(ANNO$covid_status, color=ANNO$covid_status), color=ANNO$covid_status))+ guides(color = FALSE, shape = FALSE))
+
+PC1.4<-ggplotly(ggplot(scores, 
+       aes(x = PC1, 
+           y = PC4)) +
+  geom_point(aes(color = ANNO$covid_status, shape = ANNO$sex), size = 3) +
+  stat_ellipse(aes(group=interaction(ANNO$covid_status, color=ANNO$covid_status), color=ANNO$covid_status))+ guides(color = FALSE, shape = FALSE))
+
+PC2.3<-ggplotly(ggplot(scores, 
+       aes(x = PC2, 
+           y = PC3)) +
+  geom_point(aes(color = ANNO$covid_status, shape = ANNO$sex), size = 3) +
+  stat_ellipse(aes(group=interaction(ANNO$covid_status, color=ANNO$covid_status), color=ANNO$covid_status))+ guides(color = FALSE, shape = FALSE))
+
+multiplot(PC1.2, PC1.3, PC1.4, PC2.3, cols=4)
+subplot(PC1.2, PC1.3, PC1.4, PC2.3, nrows=2, titleX = TRUE, titleY = TRUE)
+```
+
+###multiplot or subplot + ggplot
+```{r}
+first.plot<-ggplot(scores, 
+       aes(x = PC1, 
+           y = PC2)) +
+  geom_point(aes(color = ANNO$covid_status, shape = ANNO$sex), size = 3)
+ellipse.plot <- first.plot + 
+  stat_ellipse(aes(group = interaction(ANNO$covid_status, ANNO$sex), 
+                   fill = ANNO$covid_status, 
+                   color = ANNO$sex), 
+               alpha = 0.25, 
+               type = "norm",
+               geom = "polygon")
+
+print(ellipse.plot)
+ggplotly(ellipse.plot)
+
+results<-prcomp(BIOspcglyc[,1:8], center = TRUE, scale. = TRUE)
+explained_variance_ratio <- summary(results)[["importance"]]['Proportion of Variance',]
+explained_variance_ratio <- 100 * explained_variance_ratio
+scores<-(as.data.frame(results[["x"]]))
+ANNO<-BIOspcglyc[,-1:-8]
+
+PC1.2<-(ggplot(scores, 
+       aes(x = PC1, 
+           y = PC2)) +
+  geom_point(aes(color = ANNO$covid_status, shape = ANNO$sex), size = 3) +
+  stat_ellipse(aes(group=interaction(ANNO$covid_status, color=ANNO$covid_status), color=ANNO$covid_status))+ guides(color = FALSE, shape = FALSE))
+
+PC1.3<-(ggplot(scores, 
+       aes(x = PC1, 
+           y = PC3)) +
+  geom_point(aes(color = ANNO$covid_status, shape = ANNO$sex), size = 3) +
+  stat_ellipse(aes(group=interaction(ANNO$covid_status, color=ANNO$covid_status), color=ANNO$covid_status))+ guides(color = FALSE, shape = FALSE))
+
+PC1.4<-(ggplot(scores, 
+       aes(x = PC1, 
+           y = PC4)) +
+  geom_point(aes(color = ANNO$covid_status, shape = ANNO$sex), size = 3) +
+  stat_ellipse(aes(group=interaction(ANNO$covid_status, color=ANNO$covid_status), color=ANNO$covid_status))+ guides(color = FALSE, shape = FALSE))
+
+PC2.3<-(ggplot(scores, 
+       aes(x = PC2, 
+           y = PC3)) +
+  geom_point(aes(color = ANNO$covid_status, shape = ANNO$sex), size = 3) +
+  stat_ellipse(aes(group=interaction(ANNO$covid_status, color=ANNO$covid_status), color=ANNO$covid_status))+ guides(color = FALSE, shape = FALSE))
+
+PC2.4
+PC2.5
+PC2.6
+PC2.7
+PC2.8
+PC3.4
+PC3.5
+PC3.6
+PC3.7
+PC3.8
+PC4.5
+PC4.6
+PC4.7
+PC4.8
+PC5.6
+PC5.7
+PC5.8
+
+test<-ggplotly((ggplot(scores, aes(x = PC1, y = PC2)) +
+  geom_point(aes(color = ANNO$covid_status, shape = ANNO$sex), size = 3) +
+  stat_ellipse(aes(group=interaction(ANNO$covid_status, color=ANNO$covid_status), color=ANNO$covid_status))+ guides(color = FALSE, shape = FALSE)+
+  xlab(paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''))+
+  ylab(paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = '')))+
+  theme_minimal()+
+  geom_hline(yintercept=0, linetype="dashed", color = "black")+
+  geom_vline(xintercept=0, linetype="dashed", colour= "black"))
+
+label=paste(('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = '')), values=df$PC1
+
+
+multiplot(PC1.2, PC1.3, PC1.4, PC2.3, cols=2)
+subplot(PC1.2, PC1.3, titleX = TRUE, titleY = TRUE)
+multiplot(PC1.2, PC1.3, PC1.4, PC2.3, cols=2)
+
+multiplot(PC1.2, PC1.3, PC1.4, PC2.3, cols=2)
+multiplot(PC1.2, PC1.3, PC1.4, PC2.3, cols=2)
+```
+#####plot_ly + subplot
+```{r}
+library(plotly)
+controlellipse<-as.data.frame(e$control$`0.95`)
+covidellipse<-as.data.frame(e$covid$`0.95`)
+p1 <-
+  iris%>%
+  group_by(Species)%>%
+  plot_ly(x=~Sepal.Length, color= ~Species, legendgroup=~Species)%>%
+  add_markers(y= ~Sepal.Width)
+p2 <-
+  df%>%
+  group_by(covid_status)%>%
+  plot_ly(x=~PC1, color= ~covid_status, legendgroup=~covid_status)%>%
+  add_markers(y= ~PC2, showlegend=T) %>% add_polygons(x = controlellipse$x, y=controlellipse$y, inherit = FALSE, showlegend = FALSE)%>%add_polygons(x = covidellipse$x, y=covidellipse$y, inherit = FALSE, showlegend = FALSE)
+subplot(p1,p2)
+
+
+
+library(plotly)
+library(ggfortify)
+library(cluster)
+
+p1 <- autoplot(pam(iris[-5], 3), frame = TRUE, frame.type = 'norm')
+
+df <- iris[1:4]
+pca_res <- prcomp(df, scale. = TRUE)
+
+
+ggplotly(p1)
+```
+
+#####subplot + fviz_pca_ind
+```{r}
+p1 <- (fviz_pca_ind(results, axes=c(1,2), label="none", habillage=df$covid_status,
+             addEllipses=TRUE, ellipse.level=0.95))
+
+
+p2 <- (fviz_pca_ind(results, axes=c(1,3), label="none", habillage=df$covid_status,
+             addEllipses=TRUE, ellipse.level=0.95))
+p3 <- (fviz_pca_ind(results, axes=c(1,4), label="none", habillage=df$covid_status,
+             addEllipses=TRUE, ellipse.level=0.95))
+
+
+subplot(p1,p2, p3, nrows = 3, titleX = TRUE, titleY = TRUE, shareX=TRUE)
+p4 <- (fviz_pca_ind(results, axes=c(2,3), label="none", habillage=df$covid_status,
+             addEllipses=TRUE, ellipse.level=0.95))
+
+p5 <- (fviz_pca_ind(results, axes=c(2,4), label="none", habillage=df$covid_status,
+             addEllipses=TRUE, ellipse.level=0.95))
+
+p6 <- (fviz_pca_ind(results, axes=c(3,4), label="none", habillage=df$covid_status,
+             addEllipses=TRUE, ellipse.level=0.95))
+
+subplot(p1,p2,p6, nrows=3)
+ggarrange()
+
+library(gridExtra)
+library(grid)
+(grid.arrange(p1, p2, p3, p4, ncol=2))
+library("ggplotify")
+
+
+grid.arrange(
+  p1, p2,p3,p4,p5,p6,
+  widths = c(2, 2, 2),
+  layout_matrix = rbind(c(1, 2, 3),
+                        c(4,5,NA),
+                        c( 6,NA,NA))
+)
+```
+#####rbokeh
+```{r}
+install.packages("rbokeh")
+library(rbokeh)
+#Grid Plot
+tools <- c(“wheel_zoom”, “box_zoom”, “box_select”)
+p1 <- figure(tools = df[,1:8], width = 500, height = 500) %>%
+ly_points(PC1, PC2, data = df, color = df$covid_status,hover=c(age, bmi))
+p2 <- figure(tools = df[,1:8], width = 500, height = 500) %>%
+ly_points(PC1, PC3, data = df, color = df$covid_status,hover=c(age, bmi))
+grid_plot(list(p1, p2), link_data = TRUE)
+
+?figure
+```
+
+```{r}
+
+
+results <- prcomp(as.matrix(BIOspcglyc[,1:8]), center = T, scale = T)
+varexplained <- summary(results)$importance[2,]*100
+scores <- as.data.frame(results$x[,1:2])
+cisr5exp12 <- varexplained[1:2]
+cisr5_groups <- BIOspcglyc$covid_status
+
+cisr5_plot <- ggplot(scores, aes(x=PC1, y=PC2))+
+  geom_point(size= 4.5, aes(fill=cisr5$Treatment, shape = cisr5$Treatment, colour= cisr5$Treatment))+
+  scale_shape_manual(breaks=c("Cells","HIV-1 R5", "LPS", "M. bovis", "H37Rv", "HN878", "CDC1551", "EU127"),
+                     values=c("Cells" = 21,"HIV-1 R5" = 21,"LPS" = 21,"M. bovis" = 21,"HN878" = 21,"H37Rv" = 21,"EU127" = 21,"CDC1551" = 21))+
+  scale_fill_manual(breaks=c("Cells","HIV-1 R5", "LPS", "M. bovis", "H37Rv", "HN878", "CDC1551", "EU127"),
+                    values=c("Cells" = "black", "HIV-1 R5" = "grey73", "LPS" = "steelblue4", "M. bovis" = "darkorange1", "HN878" = "brown1", "H37Rv" = "seagreen", "EU127" = "darkturquoise", "CDC1551" = "goldenrod1"))+
+  scale_colour_manual(breaks=c("Cells","HIV-1 R5", "LPS", "M. bovis", "H37Rv", "HN878", "CDC1551", "EU127"),
+                    values=c("Cells" = "black", "HIV-1 R5" = "black", "LPS" = "black", "M. bovis" = "black", "HN878" = "black", "H37Rv" = "black", "EU127" = "black", "CDC1551" = "black"))+
+  geom_hline(yintercept=0, linetype="dashed", color = "black", size = 0.8)+
+  geom_vline(xintercept=0, linetype="dashed", colour= "black", size = 0.8)+
+  xlab(paste("PC1 ", "(",cisr5exp12[1],"%", ")", sep=""))+
+  ylab(paste("PC1 ", "(",cisr5exp12[2],"%", ")", sep=""))+
+  theme_minimal()+
+  theme(axis.title.y = element_text(size = 18, family = "sans"),
+        legend.position = "bottom",
+        legend.text = element_text(size = 18, family = "sans"),
+        axis.text.x = element_text(colour ="black", size = 16, family = "sans"),
+        axis.text.y = element_text(colour ="black", size = 16, family = "sans"),
+        axis.title.x = element_text(colour = "black", size = 18, family = "sans"),
+        legend.title = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_blank(),
+        plot.title = element_text(size = 10, hjust = 0.5))+
+  theme(legend.key = element_rect(fill = "white", colour = "white"))
+```
+#GGally ggpairs (works, with ellipses, not currently interactive)
+```{r}
+library(tidyverse) # plotting and manipulation
+library(grid) # combining plots
+library(gridExtra) # combining plots
+library(ggpubr) # combining plots
+library(patchwork) # combining plots
+library(ggfortify) # nice extension for ggplot
+library(mgcv) #fitting gam models
+library(GGally) # displaying pairs panel
+###########
+#example using mtcars
+mtcars1 <- mtcars %>% select(1:6)
+
+mtcars1
+## Build function for upper and lower plots
+my_fn1 <- function(data, mapping, method="gam", ...){
+  p <- ggplot(data = mtcars1, mapping = mapping) + 
+    geom_point() + 
+    geom_smooth(method=method,colour="blue", ...)+
+    stat_cor(aes(label=paste("Pearson",..rr.label.., ..p.label.., sep = "~`,`~")), 
+             method="pearson", label.y = 0)
+  p
+}  
+
+my_fn2 <- function(data, mapping, method="lm", ...){
+  p2 <- ggplot(data = mtcars1, mapping = mapping) + 
+    geom_point() + 
+    geom_smooth(method=method,colour="orangered2", ...)+
+    stat_cor(aes(label=paste("Pearson",..rr.label.., ..p.label.., sep = "~`,`~")), 
+             method="pearson", label.y = 0)
+  p2
+}   
+
+p1 <- ggpairs(mtcars1, columnLabels = c("Total Ni", "Total Mg", "Total Fe", "CEC", "pH","SWC"),
+              upper=list(continuous =my_fn1),
+              lower=list(continuous =my_fn2))+ 
+  theme_bw() + theme(axis.text.x=(element_text(size=rel(0.7), angle=0)),
+                     axis.text.y=(element_text(size=rel(0.7), angle=0)), panel.grid.major = element_blank(),
+                     panel.grid.minor = element_blank(), panel.border = element_rect(fill = NA,colour = "grey35")) 
+p1
+################ 1st attempt
+my_fn2 <- function(data, mapping, method="stat_ellipse", ...){
+  p2 <- ggplot(data = df, mapping = mapping) + 
+    geom_point(aes(color = df$covid_status, shape = df$sex), size = 3) + 
+    stat_ellipse(aes(group=interaction(ANNO$covid_status, color=ANNO$covid_status), color=ANNO$covid_status))
+  p2
+}  
+
+p1 <- GGally::ggpairs(df[,1:4], 
+              upper=list(continuous =my_fn2),
+              lower=list(NULL)+ 
+  theme_bw() + theme(axis.text.x=(element_text(size=rel(0.7), angle=0)),
+                     axis.text.y=(element_text(size=rel(0.7), angle=0)), panel.grid.major = element_blank(),
+                     panel.grid.minor = element_blank(), panel.border = element_rect(fill = NA,colour = "grey35"))) 
+(p1)
+PC1.2<-(ggplot(scores, 
+       aes(x = PC1, 
+           y = PC2)) +
+  geom_point(aes(color = ANNO$covid_status, shape = ANNO$sex), size = 3) +
+  stat_ellipse(aes(group=interaction(ANNO$covid_status, color=ANNO$covid_status), color=ANNO$covid_status))+ guides(color = FALSE, shape = FALSE))
+############## successful attempt
+
+##desired plot layout
+test<-((ggplot(scores, aes(x = PC1, y = PC2)) +
+  geom_point(aes(color = ANNO$covid_status, shape = ANNO$sex), size = 3) +
+  stat_ellipse(aes(group=interaction(ANNO$covid_status, color=ANNO$covid_status), color=ANNO$covid_status))+ guides(TRUE)+
+  xlab(paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''))+
+  ylab(paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = '')))+
+  theme_minimal()+
+  geom_hline(yintercept=0, linetype="dashed", color = "black")+
+  geom_vline(xintercept=0, linetype="dashed", colour= "black"))
+
+#use for legend
+test<-((ggplot(df, aes(x = PC1, y = PC2)) +
+  geom_point(aes(group=interaction(covid_status, color=covid_status), color=covid_status), size = 3) +
+  stat_ellipse(aes(group=interaction(covid_status, color=covid_status), color=covid_status))+ guides(TRUE)+
+  xlab(paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''))+
+  ylab(paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = '')))+
+  theme_minimal()+
+  geom_hline(yintercept=0, linetype="dashed", color = "black")+
+  geom_vline(xintercept=0, linetype="dashed", colour= "black"))
+
+#grap the legend to be used in the ggpairs object
+(grab_legend(test))
+
+#functions to feed into ggpairs
+my_fn1 <- function(data, mapping, method="stat_ellipse", ...){
+  p <- ggplot(data = df, mapping = mapping) + 
+    geom_point(aes(color = df$covid_status, shape = df$sex), size = 2) + 
+    stat_ellipse(aes(group=interaction(df$covid_status, color=df$covid_status), color=df$covid_status))+
+  theme_minimal()+
+  geom_hline(yintercept=0, linetype="dashed", color = "black")+
+  geom_vline(xintercept=0, linetype="dashed", colour= "black")
+  p
+}  
+
+my_fn2 <- function(data, mapping, method="stat_ellipse", ...){
+  p2 <- ggplot(data = df, mapping = mapping) + 
+    geom_point(aes(color = df$covid_status, shape = df$sex), size = 2) + 
+    stat_ellipse(aes(group=interaction(df$covid_status, color=df$covid_status), color=df$covid_status))+
+  theme_minimal()+
+  geom_hline(yintercept=0, linetype="dashed", color = "black")+
+  geom_vline(xintercept=0, linetype="dashed", colour= "black")
+  p2
+}  
+
+##ggpairs plot with ellipses using ggpairs and predefined fucntions
+p1 <- GGally::ggpairs(df[,1:4],
+columnLabels = c(paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = ''), paste('PC 3 (',toString(round(explained_variance_ratio[3],1)),'%)',sep = ''), paste('PC 4 (',toString(round(explained_variance_ratio[4],1)),'%)',sep = '')),
+              diag="blank",
+              upper="blank",
+              #upper=list(continuous =my_fn1),
+              lower=list(continuous =my_fn2),
+legend = grab_legend(test), progress = F, switch="both") + 
+                theme_bw() + 
+                  theme(strip.background = element_rect(fill = "white"),axis.text.x=(element_text(size=rel(0.7), angle=0)),
+                  axis.text.y=(element_text(size=rel(0.7), angle=0)), panel.grid.major = element_blank(),
+                  panel.grid.minor = element_blank(), panel.border = element_rect(fill = NA,colour = "grey35"))
+p1
+
+ ggplotly(p1)
+
+#try get rid of blanksquares
+ gpairs_lower <- function(g){
+  g$plots <- g$plots[-(1:g$nrow)]
+  g$yAxisLabels <- g$yAxisLabels[-1]
+  g$nrow <- g$nrow -1
+
+  g$plots <- g$plots[-(seq(g$ncol, length(g$plots), by = g$ncol))]
+  g$xAxisLabels <- g$xAxisLabels[-g$ncol]
+  g$ncol <- g$ncol - 1
+
+  g
+}
+
+(gpairs_lower(p1))
+
+
+```
+#Turn ggpairs into function
+desired attributes: colour scheme selection, optionally interactive with changeable details in the label, multiple trace options (shape, colour and size), possibly feed in from decided threshold 
+```{r}
+#PCAgrid2<-function(meta, Colour, Shapes, Alpha, Colourscheme, Interactive, Label1, Label2,)
+PCAgrid2<-function(Xnum,Ymeta,threshold, Size=NULL, Label2=NULL, Label3=NULL, Label4=NULL, Title=NULL, Alpha=1, Colour=NULL, Shape=NULL){
+
+#compute PC's
+results<-prcomp(Xnum, scale=TRUE, center=TRUE)
+
+#store the variance information 
+explained_variance_ratio <- summary(results)[["importance"]]['Proportion of Variance',]
+explained_variance_ratio <- 100 * explained_variance_ratio
+
+#create df for plot_ly use
+df<-cbind(as.data.frame(results[["x"]]), Ymeta)}
+
+#TROUBLE plot for legend
+test<-((ggplot(df, aes(x = PC1, y = PC2)) +
+  geom_point(aes(color=covid_status, shape=sex, alpha=0.4, size=age)) +
+  stat_ellipse(aes(group=interaction(covid_status, color=covid_status), color=covid_status))+ guides(alpha="none")+
+  xlab(paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''))+
+  ylab(paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = '')))+
+  theme_minimal()+
+  geom_hline(yintercept=0, linetype="dashed", color = "black")+
+  geom_vline(xintercept=0, linetype="dashed", colour= "black"))
+
+#TROUBLEfunction for plots with ellipses for ggpairs
+my_fn1 <- function(data, mapping, method="stat_ellipse", ...){
+  p <- ggplot(data = df, mapping = mapping) + 
+    geom_point(aes(color = df$covid_status, shape = df$sex, size=df$age, alpha=0.4)) + 
+    stat_ellipse(aes(group=interaction(df$covid_status, color=df$covid_status), color=df$covid_status))+
+  theme_minimal()+
+  geom_hline(yintercept=0, linetype="dashed", color = "black")+
+  geom_vline(xintercept=0, linetype="dashed", colour= "black")
+  p
+}  
+#the correct ggpairs plot depending on the threshold set
+P<-function(threshold){
+  if(threshold==2){P=GGally::ggpairs(df[,1:2],
+                                  columnLabels = c(paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), 
+                                                  paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = '')),
+                                  diag="blank",
+                                  upper="blank",
+                                  #upper=list(continuous =my_fn1),
+                                  lower=list(continuous =my_fn1),
+                                  legend = grab_legend(test), progress = F, switch="both") + 
+                                           theme_bw() + 
+                                                  theme(strip.background = element_rect(fill = "white"),axis.text.x=(element_text(size=rel(0.7), angle=0)),
+                                                        axis.text.y=(element_text(size=rel(0.7), angle=0)), panel.grid.major = element_blank(),
+                                                        panel.grid.minor = element_blank(), panel.border = element_rect(fill = NA,colour = "grey35"))
+    
+        }else if (threshold==3) {P=GGally::ggpairs(df[,1:3],
+                                  columnLabels = c(paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), 
+                                                  paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = ''),
+                                                  paste('PC 3 (',toString(round(explained_variance_ratio[3],1)),'%)',sep = '')),
+                                  diag="blank",
+                                  upper="blank",
+                                  #upper=list(continuous =my_fn1),
+                                  lower=list(continuous =my_fn1),
+                                  legend = grab_legend(test), progress = F, switch="both") + 
+                                           theme_bw() + 
+                                                  theme(strip.background = element_rect(fill = "white"),axis.text.x=(element_text(size=rel(0.7), angle=0)),
+                                                        axis.text.y=(element_text(size=rel(0.7), angle=0)), panel.grid.major = element_blank(),
+                                                        panel.grid.minor = element_blank(), panel.border = element_rect(fill = NA,colour = "grey35"))
+            } else if (threshold==4) {P=GGally::ggpairs(df[,1:4],
+                                  columnLabels = c(paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), 
+                                                  paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = ''),
+                                                  paste('PC 3 (',toString(round(explained_variance_ratio[3],1)),'%)',sep = ''),
+                                                  paste('PC 4 (',toString(round(explained_variance_ratio[4],1)),'%)',sep = '')),
+                                  diag="blank",
+                                  upper="blank",
+                                  #upper=list(continuous =my_fn1),
+                                  lower=list(continuous =my_fn1),
+                                  legend = grab_legend(test), progress = F, switch="both") + 
+                                           theme_bw() + 
+                                                  theme(strip.background = element_rect(fill = "white"),axis.text.x=(element_text(size=rel(0.7), angle=0)),
+                                                        axis.text.y=(element_text(size=rel(0.7), angle=0)), panel.grid.major = element_blank(),
+                                                        panel.grid.minor = element_blank(), panel.border = element_rect(fill = NA,colour = "grey35"))
+            }else if (threshold==5) {P=GGally::ggpairs(df[,1:5],
+                                  columnLabels = c(paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), 
+                                                  paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = ''),
+                                                  paste('PC 3 (',toString(round(explained_variance_ratio[3],1)),'%)',sep = ''),
+                                                  paste('PC 4 (',toString(round(explained_variance_ratio[4],1)),'%)',sep = ''),
+                                                  paste('PC 5 (',toString(round(explained_variance_ratio[5],1)),'%)',sep = '')),
+                                  diag="blank",
+                                  upper="blank",
+                                  #upper=list(continuous =my_fn1),
+                                  lower=list(continuous =my_fn1),
+                                  legend = grab_legend(test), progress = F, switch="both") + 
+                                           theme_bw() + 
+                                                  theme(strip.background = element_rect(fill = "white"),axis.text.x=(element_text(size=rel(0.7), angle=0)),
+                                                        axis.text.y=(element_text(size=rel(0.7), angle=0)), panel.grid.major = element_blank(),
+                                                        panel.grid.minor = element_blank(), panel.border = element_rect(fill = NA,colour = "grey35"))
+            }else if (threshold==6) {P=GGally::ggpairs(df[,1:6],
+                                  columnLabels = c(paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), 
+                                                  paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = ''),
+                                                  paste('PC 3 (',toString(round(explained_variance_ratio[3],1)),'%)',sep = ''),
+                                                  paste('PC 4 (',toString(round(explained_variance_ratio[4],1)),'%)',sep = ''),
+                                                  paste('PC 5 (',toString(round(explained_variance_ratio[5],1)),'%)',sep = ''),
+                                                  paste('PC 6 (',toString(round(explained_variance_ratio[6],1)),'%)',sep = '')),
+                                  diag="blank",
+                                  upper="blank",
+                                  #upper=list(continuous =my_fn1),
+                                  lower=list(continuous =my_fn1),
+                                  legend = grab_legend(test), progress = F, switch="both") + 
+                                           theme_bw() + 
+                                                  theme(strip.background = element_rect(fill = "white"),axis.text.x=(element_text(size=rel(0.7), angle=0)),
+                                                        axis.text.y=(element_text(size=rel(0.7), angle=0)), panel.grid.major = element_blank(),
+                                                        panel.grid.minor = element_blank(), panel.border = element_rect(fill = NA,colour = "grey35"))
+            }else if (threshold==7) {P=GGally::ggpairs(df[,1:7],
+                                  columnLabels = c(paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), 
+                                                  paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = ''),
+                                                  paste('PC 3 (',toString(round(explained_variance_ratio[3],1)),'%)',sep = ''),
+                                                  paste('PC 4 (',toString(round(explained_variance_ratio[4],1)),'%)',sep = ''),
+                                                  paste('PC 5 (',toString(round(explained_variance_ratio[5],1)),'%)',sep = ''),
+                                                  paste('PC 6 (',toString(round(explained_variance_ratio[6],1)),'%)',sep = ''),
+                                                  paste('PC 7 (',toString(round(explained_variance_ratio[7],1)),'%)',sep = '')),
+                                  diag="blank",
+                                  upper="blank",
+                                  #upper=list(continuous =my_fn1),
+                                  lower=list(continuous =my_fn1),
+                                  legend = grab_legend(test), progress = F, switch="both") + 
+                                           theme_bw() + 
+                                                  theme(strip.background = element_rect(fill = "white"),axis.text.x=(element_text(size=rel(0.7), angle=0)),
+                                                        axis.text.y=(element_text(size=rel(0.7), angle=0)), panel.grid.major = element_blank(),
+                                                        panel.grid.minor = element_blank(), panel.border = element_rect(fill = NA,colour = "grey35"))
+              
+            }else if (threshold==8) {P=GGally::ggpairs(df[,1:8],
+                                  columnLabels = c(paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), 
+                                                  paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = ''),
+                                                  paste('PC 3 (',toString(round(explained_variance_ratio[3],1)),'%)',sep = ''),
+                                                  paste('PC 4 (',toString(round(explained_variance_ratio[4],1)),'%)',sep = ''),
+                                                  paste('PC 5 (',toString(round(explained_variance_ratio[5],1)),'%)',sep = ''),
+                                                  paste('PC 6 (',toString(round(explained_variance_ratio[6],1)),'%)',sep = ''),
+                                                  paste('PC 7 (',toString(round(explained_variance_ratio[7],1)),'%)',sep = ''),
+                                                  paste('PC 8 (',toString(round(explained_variance_ratio[8],1)),'%)',sep = '')),
+                                  diag="blank",
+                                  upper="blank",
+                                  #upper=list(continuous =my_fn1),
+                                  lower=list(continuous =my_fn1),
+                                  legend = grab_legend(test), progress = F, switch="both") + 
+                                           theme_bw() + 
+                                                  theme(strip.background = element_rect(fill = "white"),axis.text.x=(element_text(size=rel(0.7), angle=0)),
+                                                        axis.text.y=(element_text(size=rel(0.7), angle=0)), panel.grid.major = element_blank(),
+                                                        panel.grid.minor = element_blank(), panel.border = element_rect(fill = NA,colour = "grey35"))
+              
+            }
+  return(P)}
+  
+#try get rid of blanksquares (upper half and diagonal)
+ gpairs_lower <- function(g){
+  g$plots <- g$plots[-(1:g$nrow)]
+  g$yAxisLabels <- g$yAxisLabels[-1]
+  g$nrow <- g$nrow -1
+
+  g$plots <- g$plots[-(seq(g$ncol, length(g$plots), by = g$ncol))]
+  g$xAxisLabels <- g$xAxisLabels[-g$ncol]
+  g$ncol <- g$ncol - 1
+
+  g
+}
+
+plot<-function(interactive){ if(interactive==FALSE){
+  plot<-(gpairs_lower(P))
+}else if (interactive==TRUE){
+  plot<-ggplotly(gpairs_lower(P))
+}
+}
+
+print(plot)
+
+
+##troubleshoot
+#TROUBLE plot for legend
+test<-function(x, y, colour, shape, alpha, size){ 
+  ggplot(df, aes(x = .data[[x]], y = .data[[y]], color=.data[[colour]], shape=.data[[shape]], alpha=alpha, size=size)) +
+  geom_point() +
+  guides()+
+  theme_minimal()
+}
+test(x="PC1", y="PC2",colour = "covid_status", shape="sex", alpha=.4, size=1)
+test(x="PC1", y="PC2",colour = "covid_status", shape="")
+
+scatter_fun = function(x, y) {
+     ggplot(df, aes(x = .data[[x]], y = .data[[y]]) ) +
+          geom_point() +
+          geom_smooth(method = "loess", se = FALSE, color = "grey74") +
+          theme_bw()
+}
+scatter_fun(x="PC1", y="PC2")
+
+test<-function(df, Colour, Shape, Size, Alpha) {
+  ggplot(df, aes(x = PC1, y = PC2, color=Colour, shape=Shape, alpha=Alpha, size=Size), environment=environment()) +
+  geom_point() +
+  guides()+
+  theme_minimal()
+}
+test(df,Colour="covid_status", Shape="sex", Size="bmi", Alpha="age")
+
+testplot <- function(meansdf)
+{
+  scale <- 0.5
+  p <- ggplot(meansdf, 
+              aes(fill = condition,
+                  y = means * scale,
+                  x = condition),
+              environment = environment())   # This is the only line changed / added
+  p + geom_bar(position = "dodge", stat = "identity")
+}
+
+## Now, the following works
+testplot(means)
+
+
+results<-prcomp(BIOspcglyc[,1:8], scale=TRUE, center=TRUE)
+
+#create df for plot_ly use
+df<-cbind(as.data.frame(results[["x"]]), BIOspcglyc[,-1:-8])
+test(df, Colour=df$covid_status, Shape=df$sex, Size=1, Alpha=1)
+```
+
+
+#safe version
+```{r}
+#use for legend
+test<-((ggplot(df, aes(x = PC1, y = PC2)) +
+  geom_point(aes(color=covid_status, shape=sex, alpha=0.4, size=age)) +
+  stat_ellipse(aes(group=interaction(covid_status, color=covid_status), color=covid_status))+ guides(alpha="none")+
+  xlab(paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''))+
+  ylab(paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = '')))+
+  theme_minimal()+
+  geom_hline(yintercept=0, linetype="dashed", color = "black")+
+  geom_vline(xintercept=0, linetype="dashed", colour= "black"))
+
+#grap the legend to be used in the ggpairs object
+(grab_legend(test))
+
+#functions to feed into ggpairs
+my_fn1 <- function(data, mapping, method="stat_ellipse", ...){
+  p <- ggplot(data = df, mapping = mapping) + 
+    geom_point(aes(color = df$covid_status, shape = df$sex, size=df$age, alpha=0.4)) + 
+    stat_ellipse(aes(group=interaction(df$covid_status, color=df$covid_status), color=df$covid_status))+
+  theme_minimal()+
+  geom_hline(yintercept=0, linetype="dashed", color = "black")+
+  geom_vline(xintercept=0, linetype="dashed", colour= "black")
+  p
+}  
+#####option to add another funtion to above trianlge, statistically significance of the ellipses separation?
+# my_fn2 <- function(data, mapping, method="stat_ellipse", ...){
+#   p2 <- ggplot(data = df, mapping = mapping) + 
+#     geom_point(aes(color = df$covid_status, shape = df$sex), size = 2) + 
+#     stat_ellipse(aes(group=interaction(df$covid_status, color=df$covid_status), color=df$covid_status))+
+#   theme_minimal()+
+#   geom_hline(yintercept=0, linetype="dashed", color = "black")+
+#   geom_vline(xintercept=0, linetype="dashed", colour= "black")
+#   p2
+# }  
+
+##ggpairs plot with ellipses using ggpairs and predefined fucntions
+p1 <- GGally::ggpairs(df[,1:4],
+columnLabels = c(paste('PC 1 (',toString(round(explained_variance_ratio[1],1)),'%)',sep = ''), paste('PC 2 (',toString(round(explained_variance_ratio[2],1)),'%)',sep = ''), paste('PC 3 (',toString(round(explained_variance_ratio[3],1)),'%)',sep = ''), paste('PC 4 (',toString(round(explained_variance_ratio[4],1)),'%)',sep = '')),
+              diag="blank",
+              upper="blank",
+              #upper=list(continuous =my_fn1),
+              lower=list(continuous =my_fn1),
+legend = grab_legend(test), progress = F, switch="both") + 
+                theme_bw() + 
+                  theme(strip.background = element_rect(fill = "white"),axis.text.x=(element_text(size=rel(0.7), angle=0)),
+                  axis.text.y=(element_text(size=rel(0.7), angle=0)), panel.grid.major = element_blank(),
+                  panel.grid.minor = element_blank(), panel.border = element_rect(fill = NA,colour = "grey35"))
+p1
+
+#try get rid of blanksquares
+ gpairs_lower <- function(g){
+  g$plots <- g$plots[-(1:g$nrow)]
+  g$yAxisLabels <- g$yAxisLabels[-1]
+  g$nrow <- g$nrow -1
+
+  g$plots <- g$plots[-(seq(g$ncol, length(g$plots), by = g$ncol))]
+  g$xAxisLabels <- g$xAxisLabels[-g$ncol]
+  g$ncol <- g$ncol - 1
+
+  g
+}
+
+(gpairs_lower(p1))
+ 
+ #interactive
+  ggplotly(gpairs_lower(p1))
+```
+#possible statistical significance separation test
+```{r}
+?vegan::rda
+```
+#loadings
+
+Beware of too many variables, may want to only plot a proportion of them?
+```{r}
+loadings<-as.data.frame(results["rotation"])
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
